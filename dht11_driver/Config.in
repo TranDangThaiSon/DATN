@@ -1,0 +1,5 @@
+config BR2_PACKAGE_DHT11_DRIVER
+	bool "dht11_driver"
+	depends on BR2_LINUX_KERNEL
+	help
+	  Driver for DHT11 sensor on Raspberry Pi 4.

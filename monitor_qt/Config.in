@@ -1,0 +1,12 @@
+config BR2_PACKAGE_MONITOR_QT
+    bool "monitor_qt"
+    depends on BR2_PACKAGE_QT5
+    select BR2_PACKAGE_QT5BASE_WIDGETS
+    select BR2_PACKAGE_QT5BASE_FONTCONFIG
+    select BR2_PACKAGE_QT5BASE_CONCURRENT
+    select BR2_PACKAGE_QT5BASE_PNG # Cần thiết nếu có icon/ảnh
+    select BR2_PACKAGE_LIBCURL
+    select BR2_PACKAGE_TENSORFLOW_LITE
+    help
+      Qt Monitoring Application with Edge Impulse TFLite model.
+      Displays Temp, Humid, Lux and AI Prediction.

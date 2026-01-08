@@ -1,0 +1,5 @@
+config BR2_PACKAGE_BH1750_DRIVER
+    bool "bh1750_driver"
+    depends on BR2_LINUX_KERNEL
+    help
+      Driver for BH1750 Light Sensor via I2C.
