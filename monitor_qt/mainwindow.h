@@ -13,7 +13,6 @@
 #include "tensorflow/lite/model.h"
 #include "tensorflow/lite/kernels/register.h"
 
-// --- CẤU HÌNH ---
 #define RAW_FEATURE_COUNT 5
 #define MODEL_INPUT_COUNT 20
 #define WINDOW_LEN 90
@@ -84,11 +83,16 @@ private:
     int buffer_head = 0;
     int samples_collected = 0;
     
-    int lastPredictionIdx = 0; // 0 = Normal
+    int lastPredictionIdx = 0; 
 
-    // Data Buffer (Curve Detection)
+    // Data Buffer
     QList<BufferedSample> dataBuffer;
     int cooldownTimer = 0;
+
+    // Sensor Last Known Values
+    float lastValidTemp;
+    float lastValidHum;
+    float lastValidLux;
 
     // Functions
     void setupUI();

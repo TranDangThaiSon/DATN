@@ -45,6 +45,7 @@
 #define EXTRACT_DIR     "/mnt/data/model_temp_extract"
 #define WIFI_CONF_FILE  "/etc/wpa_supplicant.conf"
 #define WIFI_IFACE      "wlan0"
+// Thay th? b?ng API Key th?t c?a b?n n?u c?n
 #define EI_API_KEY      "ei_938352ab999f8f68e87a537d008fc05e944ef77b9589338f8f525fcd74f3c47d"
 #define PROJECT_ID      "855133"
 
@@ -93,7 +94,7 @@ public:
         const char* row3[] = {"a","s","d","f","g","h","j","k","l"}; for(int i=0; i<9; i++) addButton(kbLayout, row3[i], 2, i);
         QPushButton *btnShift = new QPushButton("Shift", this); btnShift->setObjectName("SpecialBtn"); connect(btnShift, &QPushButton::clicked, this, &WifiDialog::toggleShift); kbLayout->addWidget(btnShift, 3, 0, 1, 2);
         const char* row4[] = {"z","x","c","v","b","n","m"}; for(int i=0; i<7; i++) addButton(kbLayout, row4[i], 3, i+2);
-        QPushButton *btnBack = new QPushButton("⌫", this); btnBack->setObjectName("SpecialBtn"); connect(btnBack, &QPushButton::clicked, this, &WifiDialog::onBackspace); kbLayout->addWidget(btnBack, 3, 9, 1, 1);
+        QPushButton *btnBack = new QPushButton("?", this); btnBack->setObjectName("SpecialBtn"); connect(btnBack, &QPushButton::clicked, this, &WifiDialog::onBackspace); kbLayout->addWidget(btnBack, 3, 9, 1, 1);
         const char* row5[] = {"@", "_", "-", ".", "/", "!", "#", "$", "?"}; for(int i=0; i<9; i++) addButton(kbLayout, row5[i], 4, i);
         QPushButton *btnSpace = new QPushButton("Space", this); kbLayout->addWidget(btnSpace, 4, 9, 1, 1); connect(btnSpace, &QPushButton::clicked, [=](){ if(currentFocus) currentFocus->insert(" "); });
 
@@ -154,6 +155,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     
     lastPredictionIdx = 0; // Reset last prediction to Normal
 
+    // Init sensor backup values
+    lastValidTemp = 25.0f; // Gi� tr? m?c d?nh an to�n
+    lastValidHum = 60.0f;
+    lastValidLux = 100.0f;
+
     isSystemReady = false; start_time = 0;
     loadModel();
 
@@ -175,7 +181,7 @@ void MainWindow::setupUI() {
 
     QGridLayout *sensorLayout = new QGridLayout();
     QLabel *iconTemp = new QLabel("TEMP", this); iconTemp->setAlignment(Qt::AlignCenter);
-    lblTemp = new QLabel("-- °C", this); lblTemp->setAlignment(Qt::AlignCenter);
+    lblTemp = new QLabel("-- �C", this); lblTemp->setAlignment(Qt::AlignCenter);
     lblTemp->setStyleSheet("font-size: 36px; font-weight: bold; color: #FF5722;");
     QLabel *iconHum = new QLabel("HUMID", this); iconHum->setAlignment(Qt::AlignCenter);
     lblHum = new QLabel("-- %", this); lblHum->setAlignment(Qt::AlignCenter);
@@ -417,36 +423,66 @@ void MainWindow::onUpdateModelClicked() {
     lblStatus->setText("Starting Update Process..."); lastWifiState = "UPDATING"; QtConcurrent::run([=]() { this->performUpdateSequence(); });
 }
 
-// ============================================================================
-//  MAIN LOOP LOGIC - MODIFIED
-// ============================================================================
 void MainWindow::onTimerTick() {
-    float temp = 0, hum = 0, lux = 0; readDHT11(&temp, &hum); readBH1750(&lux);
-    lblTemp->setText(QString::number(temp, 'f', 1) + " °C"); lblHum->setText(QString::number(hum, 'f', 1) + " %"); lblLux->setText(QString::number(lux, 'f', 0) + " Lux");
-    time_t now = time(NULL); if (isSystemReady) lblTime->setText(QDateTime::fromTime_t(now).toString("dddd, dd MMM yyyy - HH:mm")); else lblTime->setText("Waiting for Time Sync...");
+    // 1. READ SENSOR
+    float raw_temp = 0, raw_hum = 0, raw_lux = 0;
+    int retDHT = readDHT11(&raw_temp, &raw_hum);
+    int retBH = readBH1750(&raw_lux);
+    
+    if (retDHT == 0 && raw_temp != 0 && raw_hum != 0) {
+        lastValidTemp = raw_temp;
+        lastValidHum = raw_hum;
+    } else {
+        qDebug() << "Sensor Error or Zero Detected! Using Last Known Values.";
+    }
+    
+    if (retBH == 0) lastValidLux = raw_lux;
+
+    float finalTemp = lastValidTemp;
+    float finalHumid = lastValidHum;
+    float finalLux = lastValidLux;
+
+    lblTemp->setText(QString::number(finalTemp, 'f', 1) + " �C");
+    lblHum->setText(QString::number(finalHumid, 'f', 1) + " %");
+    lblLux->setText(QString::number(finalLux, 'f', 0) + " Lux");
+
+    time_t now = time(NULL); 
+    if (isSystemReady) lblTime->setText(QDateTime::fromTime_t(now).toString("dddd, dd MMM yyyy - HH:mm")); 
+    else lblTime->setText("Waiting for Time Sync...");
+    
     if (!isSystemReady) return;
 
     // 2. PREPARE DATA
-    BufferedSample sample; sample.timestamp = (long)now; sample.temp = temp; sample.humid = hum; sample.lux = lux; sample.label = "normal";
-    float all_feats[9]; calcTimeFeatures(now, all_feats); all_feats[6] = temp; all_feats[7] = hum; all_feats[8] = lux; memcpy(sample.features, all_feats, sizeof(float)*9);
+    BufferedSample sample; sample.timestamp = (long)now; sample.temp = finalTemp; sample.humid = finalHumid; sample.lux = finalLux; sample.label = "normal";
+    float all_feats[9]; calcTimeFeatures(now, all_feats); all_feats[6] = finalTemp; all_feats[7] = finalHumid; all_feats[8] = finalLux; memcpy(sample.features, all_feats, sizeof(float)*9);
     dataBuffer.append(sample);
 
-    // 3. DETECT EVENTS (Curve Logic for AUTO LABELING ONLY)
+    // 3. DETECT EVENTS
     if (dataBuffer.size() > DETECTION_WINDOW && cooldownTimer == 0) {
-        int currentIdx = dataBuffer.size() - 1; int pastIdx = currentIdx - DETECTION_WINDOW;
-        BufferedSample current = dataBuffer[currentIdx]; BufferedSample past = dataBuffer[pastIdx];
-        float deltaTemp = current.temp - past.temp; float deltaHumid = current.humid - past.humid;
+        int currentIdx = dataBuffer.size() - 1;
+        int pastIdx = currentIdx - DETECTION_WINDOW;
+        
+        float avgTempCurrent = (dataBuffer[currentIdx].temp + dataBuffer[currentIdx-1].temp + dataBuffer[currentIdx-2].temp) / 3.0f;
+        float avgTempPast = (dataBuffer[pastIdx].temp + dataBuffer[pastIdx+1].temp + dataBuffer[pastIdx+2].temp) / 3.0f;
+        
+        float avgHumidCurrent = (dataBuffer[currentIdx].humid + dataBuffer[currentIdx-1].humid + dataBuffer[currentIdx-2].humid) / 3.0f;
+        float avgHumidPast = (dataBuffer[pastIdx].humid + dataBuffer[pastIdx+1].humid + dataBuffer[pastIdx+2].humid) / 3.0f;
+
+        float deltaTemp = avgTempCurrent - avgTempPast;
+        float deltaHumid = avgHumidCurrent - avgHumidPast;
+        
         QString detectedEvent = "";
+        
         if (deltaTemp >= THRESHOLD_TEMP_RISE) {
             if (deltaHumid >= THRESHOLD_HUMID_RISE) detectedEvent = "temp_inc, humid_inc";
             else if (deltaHumid <= THRESHOLD_HUMID_DROP) detectedEvent = "temp_inc, humid_dec";
         }
+
         if (!detectedEvent.isEmpty()) {
             // Relabel Backwards
             int labelEndIdx = pastIdx; int labelStartIdx = labelEndIdx - PREDICTION_OFFSET; if (labelStartIdx < 0) labelStartIdx = 0;
             for (int i = labelStartIdx; i <= labelEndIdx; i++) if (dataBuffer[i].label == "normal") dataBuffer[i].label = detectedEvent;
             
-            // NOTE: REMOVED AC UI TRIGGER FROM HERE
             cooldownTimer = 90; 
         }
     } else { if (cooldownTimer > 0) cooldownTimer--; }
@@ -463,7 +499,7 @@ void MainWindow::onTimerTick() {
         }
     }
 
-    // 5. INFERENCE (Trigger AC Logic Here)
+    // 5. INFERENCE
     float raw_input[RAW_FEATURE_COUNT]; raw_input[0] = all_feats[0]; raw_input[1] = all_feats[1]; raw_input[2] = all_feats[6]; raw_input[3] = all_feats[7]; raw_input[4] = all_feats[8];
     buffer_head = (buffer_head + 1) % WINDOW_LEN; for(int k=0; k<RAW_FEATURE_COUNT; k++) input_buffer[buffer_head][k] = raw_input[k];
     samples_collected++;
@@ -502,9 +538,6 @@ void MainWindow::runInference() {
     int max_idx = 0; for(int i=1; i<NUM_LABELS; i++) if(probs[i] > probs[max_idx]) max_idx = i;
     lblPrediction->setText(QString("%1 (%2%)").arg(LABELS_TEXT[max_idx]).arg(probs[max_idx] * 100, 0, 'f', 1));
 
-    // --- AC TRIGGER LOGIC ---
-    // Chỉ kích hoạt nếu trạng thái thay đổi từ Normal sang Anomaly (khác 0)
-    // Và độ tin cậy > 60%
     if (max_idx != 0 && lastPredictionIdx == 0) {
         if (probs[max_idx] > 0.6) {
              if (acWidget && acLabel) {
@@ -513,6 +546,5 @@ void MainWindow::runInference() {
              }
         }
     }
-    // Update trạng thái cũ
     lastPredictionIdx = max_idx;
 }
